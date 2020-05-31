@@ -28,24 +28,12 @@
 #endif
 
 //**************************************************************************************************
-/** 
- \defgroup DAP_Config_Debug_gr CMSIS-DAP Debug Unit Information
- \ingroup DAP_ConfigIO_gr
- @{
- Provides definitions about the hardware and configuration of the Debug Unit.
 
- This information includes:
- - Definition of Cortex-M processor parameters used in CMSIS-DAP Debug Unit.
- - Debug Unit communication packet size.
- - Debug Access Port communication mode (JTAG or SWD).
- - Optional information about a connected Target Device (for Evaluation Boards).
- */
-
-#include "stm32f0xx.h"                          // Debug Unit Cortex-M Processor Header File
+#include <libopencm3/stm32/gpio.h>
 
 /// Processor Clock of the Cortex-M MCU used in the Debug Unit.
 /// This value is used to calculate the SWD/JTAG clock speed.
-#define CPU_CLOCK               48000000U       ///< Specifies the CPU Clock in Hz
+#define CPU_CLOCK               72000000U       ///< Specifies the CPU Clock in Hz
 
 /// Number of processor cycles for I/O Port write operations.
 /// This value is used to calculate the SWD/JTAG clock speed that is generated with I/O
@@ -57,7 +45,7 @@
 
 /// Indicate that Serial Wire Debug (SWD) communication mode is available at the Debug Access Port.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
-#define DAP_SWD                 1               ///< SWD Mode:  1 = available, 0 = not available
+#define DAP_SWD                 0               ///< SWD Mode:  1 = available, 0 = not available
 
 /// Indicate that JTAG communication mode is available at the Debug Port.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
@@ -112,6 +100,18 @@
 #define TARGET_DEVICE_NAME      "LPC2103"      ///< String indicating the Target Device
 #endif
 
+#define JTAG_PORT GPIOA
+#define TCK_PIN      GPIO5
+#define TDO_PIN      GPIO6
+#define TMS_PIN      GPIO4
+#define TDI_PIN      GPIO3
+#define RST_PIN      GPIO2
+
+#define LED_PORT     GPIOB
+#define LED0         GPIO2
+#define LED1         GPIO10
+#define LED2         GPIO11
+
 ///@}
 
 //**************************************************************************************************
@@ -157,10 +157,15 @@
  */
 static __inline void PORT_JTAG_SETUP(void)
 {
-	SET_FIELD(GPIOA->ODR, 0x00fa, 0x00fa);
-	SET_FIELD(GPIOA->OTYPER, 0x00fa, 0x0082);
-	SET_FIELD(GPIOA->OSPEEDR, 0x0000ffcc, 0x0000ffcc);
-	SET_FIELD(GPIOA->MODER, 0x0000ffcc, 0x00005504);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+			GPIO_CNF_OUTPUT_PUSHPULL,
+			TMS_PIN | TCK_PIN | TDI_PIN | RST_PIN);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+			GPIO_CNF_INPUT_FLOAT,
+			TMS_PIN);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_INPUT,
+			GPIO_CNF_INPUT_FLOAT,
+			TDO_PIN);
 }
 
 /** Setup SWD I/O pins: SWCLK, SWDIO, and nRESET.
@@ -170,10 +175,9 @@ static __inline void PORT_JTAG_SETUP(void)
  */
 static __inline void PORT_SWD_SETUP(void)
 {
-	SET_FIELD(GPIOA->ODR, 0x00fa, 0x0032);
-	SET_FIELD(GPIOA->OTYPER, 0x00fa, 0x0002);
-	SET_FIELD(GPIOA->OSPEEDR, 0x0000ffcc, 0x00000f0c);
-	SET_FIELD(GPIOA->MODER, 0x0000ffcc, 0x00000504);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+				GPIO_CNF_OUTPUT_PUSHPULL,
+				TMS_PIN | TCK_PIN | TDI_PIN | RST_PIN);
 }
 
 /** Disable JTAG/SWD I/O Pins.
@@ -182,10 +186,9 @@ static __inline void PORT_SWD_SETUP(void)
  */
 static __inline void PORT_OFF(void)
 {
-	SET_FIELD(GPIOA->ODR, 0x00fa, 0x0000);
-	SET_FIELD(GPIOA->OTYPER, 0x00fa, 0x0000);
-	SET_FIELD(GPIOA->OSPEEDR, 0x0000ffcc, 0x00000000);
-	SET_FIELD(GPIOA->MODER, 0x0000ffcc, 0x00000000);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_INPUT,
+			GPIO_CNF_INPUT_FLOAT,
+			TDO_PIN | TMS_PIN | TCK_PIN | TDI_PIN);
 }
 
 // SWCLK/TCK I/O pin -------------------------------------
@@ -195,7 +198,7 @@ static __inline void PORT_OFF(void)
  */
 static __forceinline uint32_t PIN_SWCLK_TCK_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0010);
+	return gpio_get(JTAG_PORT,TCK_PIN);
 }
 
 /** SWCLK/TCK I/O pin: Set Output to High.
@@ -217,7 +220,11 @@ static __forceinline void PIN_SWCLK_TCK_CLR(void)
 
 static __forceinline void PIN_SWCLK_TCK_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0010 << (bit ? 0 : 16);
+	if ( bit ) {
+		gpio_set(JTAG_PORT,TCK_PIN);
+	} else {
+		gpio_clear(JTAG_PORT,TCK_PIN);
+	}
 }
 
 // SWDIO/TMS Pin I/O --------------------------------------
@@ -253,7 +260,7 @@ static __forceinline void PIN_SWDIO_TMS_CLR(void)
  */
 static __forceinline uint32_t PIN_SWDIO_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0020);
+	return gpio_get(JTAG_PORT, TMS_PIN);
 }
 
 /** SWDIO I/O pin: Set Output (used in SWD mode only).
@@ -261,7 +268,11 @@ static __forceinline uint32_t PIN_SWDIO_IN(void)
  */
 static __forceinline void PIN_SWDIO_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0020 << (bit ? 0 : 16);
+	if ( bit ) {
+		gpio_set(JTAG_PORT,TMS_PIN);
+	} else {
+		gpio_clear(JTAG_PORT,TMS_PIN);
+	}
 }
 
 /** SWDIO I/O pin: Switch to Output mode (used in SWD mode only).
@@ -270,7 +281,9 @@ static __forceinline void PIN_SWDIO_OUT(uint32_t bit)
  */
 static __forceinline void PIN_SWDIO_OUT_ENABLE(void)
 {
-	SET_FIELD(GPIOA->MODER, 0x00000c00, 0x00000400);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ,
+				GPIO_CNF_OUTPUT_PUSHPULL,
+				TDI_PIN);
 }
 
 /** SWDIO I/O pin: Switch to Input mode (used in SWD mode only).
@@ -279,7 +292,9 @@ static __forceinline void PIN_SWDIO_OUT_ENABLE(void)
  */
 static __forceinline void PIN_SWDIO_OUT_DISABLE(void)
 {
-	SET_FIELD(GPIOA->MODER, 0x00000c00, 0x00000000);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_INPUT,
+				GPIO_CNF_INPUT_FLOAT,
+				TDI_PIN);
 }
 
 // TDI Pin I/O ---------------------------------------------
@@ -289,7 +304,7 @@ static __forceinline void PIN_SWDIO_OUT_DISABLE(void)
  */
 static __forceinline uint32_t PIN_TDI_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0040);
+	return gpio_get(JTAG_PORT, TDI_PIN);
 }
 
 /** TDI I/O pin: Set Output.
@@ -297,7 +312,11 @@ static __forceinline uint32_t PIN_TDI_IN(void)
  */
 static __forceinline void PIN_TDI_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0040 << (bit ? 0 : 16);
+	if ( bit ) {
+		gpio_set(JTAG_PORT,TDI_PIN);
+	} else {
+		gpio_clear(JTAG_PORT,TDI_PIN);
+	}
 }
 
 // TDO Pin I/O ---------------------------------------------
@@ -307,7 +326,7 @@ static __forceinline void PIN_TDI_OUT(uint32_t bit)
  */
 static __forceinline uint32_t PIN_TDO_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0010);
+	return gpio_get(JTAG_PORT, TDO_PIN);
 }
 
 // nTRST Pin I/O -------------------------------------------
@@ -317,7 +336,7 @@ static __forceinline uint32_t PIN_TDO_IN(void)
  */
 static __forceinline uint32_t PIN_nTRST_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0080);
+	return gpio_get(JTAG_PORT, RST_PIN);
 }
 
 /** nTRST I/O pin: Set Output.
@@ -327,7 +346,11 @@ static __forceinline uint32_t PIN_nTRST_IN(void)
  */
 static __forceinline void PIN_nTRST_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0080 << (bit ? 0 : 16);
+	if ( bit ) {
+		gpio_clear(JTAG_PORT,RST_PIN);
+	} else {
+		gpio_set(JTAG_PORT,RST_PIN);
+	}
 }
 
 // nRESET Pin I/O------------------------------------------
@@ -337,7 +360,7 @@ static __forceinline void PIN_nTRST_OUT(uint32_t bit)
  */
 static __forceinline uint32_t PIN_nRESET_IN(void)
 {
-	return !!(GPIOA->IDR & 0x0002);
+	return gpio_get(JTAG_PORT, RST_PIN);
 }
 
 /** nRESET I/O pin: Set Output.
@@ -347,7 +370,11 @@ static __forceinline uint32_t PIN_nRESET_IN(void)
  */
 static __forceinline void PIN_nRESET_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0002 << (bit ? 0 : 16);
+	if ( bit ) {
+		gpio_clear(JTAG_PORT,RST_PIN);
+	} else {
+		gpio_set(JTAG_PORT,RST_PIN);
+	}
 }
 
 ///@}
@@ -372,7 +399,11 @@ static __forceinline void PIN_nRESET_OUT(uint32_t bit)
  */
 static __inline void LED_CONNECTED_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0400 << (!bit ? 0 : 16);
+	if ( bit ) {
+		gpio_set(LED_PORT,LED1);
+	} else {
+		gpio_clear(LED_PORT,LED1);
+	}
 }
 
 /** Debug Unit: Set status Target Running LED.
@@ -382,7 +413,11 @@ static __inline void LED_CONNECTED_OUT(uint32_t bit)
  */
 static __inline void LED_RUNNING_OUT(uint32_t bit)
 {
-	GPIOA->BSRR = 0x0200 << (!bit ? 0 : 16);
+	if ( bit ) {
+		gpio_set(LED_PORT,LED2);
+	} else {
+		gpio_clear(LED_PORT,LED2);
+	}
 }
 
 ///@}
@@ -406,12 +441,8 @@ static __inline void LED_RUNNING_OUT(uint32_t bit)
  */
 static __inline void DAP_SETUP(void)
 {
-	RCC->AHBENR |= RCC_AHBENR_GPIOAEN | RCC_AHBENR_GPIOBEN;
-	SET_FIELD(GPIOA->ODR, 0x0704, 0x0600);
-	SET_FIELD(GPIOA->OTYPER, 0x0704, 0x0600);
-	SET_FIELD(GPIOA->OSPEEDR, 0x003f0030, 0x00000000);
-	SET_FIELD(GPIOA->PUPDR, 0x003f0030, 0x00000020);
-	SET_FIELD(GPIOA->MODER, 0x003f0030, 0x00150000);
+	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
+			      GPIO_CNF_OUTPUT_PUSHPULL, LED0 | LED1 | LED2);
 	PORT_OFF();
 }
 
