@@ -71,9 +71,13 @@ ifeq ($(V),1)
 $(info Using $(OPENCM3_DIR) path to library)
 endif
 
-INCLUDE_DIR	= $(OPENCM3_DIR)/include
-LIB_DIR		= $(OPENCM3_DIR)/lib
-SCRIPT_DIR	= $(OPENCM3_DIR)/scripts
+INCLUDE_DIR	+= -I$(OPENCM3_DIR)include \
+				-I$(OPENCM3_DIR)include/libopencm3/ \
+				-I$(OPENCM3_DIR)include/libopencm3/cm3 \
+				-I$(OPENCM3_DIR)include/libopencm3/stm32 \
+				-I$(OPENCM3_DIR)include/libopencm3/usb
+LIB_DIR		= $(OPENCM3_DIR)lib
+SCRIPT_DIR	= $(OPENCM3_DIR)scripts
 
 ###############################################################################
 # C flags
@@ -95,14 +99,14 @@ CXXFLAGS	+= -fno-common -ffunction-sections -fdata-sections
 
 CPPFLAGS	+= -MD
 CPPFLAGS	+= -Wall -Wundef
-CPPFLAGS	+= -I$(INCLUDE_DIR) $(DEFS)
+CPPFLAGS	+= $(INCLUDE_DIR) $(DEFS)
 
 ###############################################################################
 # Linker flags
 
 LDFLAGS		+= --static -nostartfiles
 LDFLAGS		+= -L$(LIB_DIR)
-LDFLAGS		+= -T$(LDSCRIPT)
+LDFLAGS		+= -T$(LIB_DIR)/stm32/f1/$(LDSCRIPT)
 LDFLAGS		+= -Wl,-Map=$(*).map
 LDFLAGS		+= -Wl,--gc-sections
 ifeq ($(V),99)
@@ -160,6 +164,7 @@ $(LDSCRIPT):
 
 %.elf %.map: $(OBJS) $(LDSCRIPT) $(LIB_DIR)/lib$(LIBNAME).a
 	@printf "  LD      $(*).elf\n"
+	@echo $(LDSCRIPT)
 	$(Q)$(LD) $(LDFLAGS) $(ARCH_FLAGS) $(OBJS) $(LDLIBS) -o $(*).elf
 
 %.o: %.c

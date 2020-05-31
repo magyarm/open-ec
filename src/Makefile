@@ -22,6 +22,18 @@ BINARY = ec
 
 OBJS = usb_private.o
 
+DAPLINK_OBJS = ../cmsis-dap/src/DAP_vendor.o \
+				../cmsis-dap/src/DAP.o \
+				../cmsis-dap/src/JTAG_DP.o \
+				../cmsis-dap/src/SW_DP.o \
+				../cmsis-dap/src/SWO.o
+
+DAPLINK_INCLUDE = -I../cmsis-dap/include/
+
+INCLUDE_DIR += $(DAPLINK_INCLUDE)
+				
+OBJS += $(DAPLINK_OBJS)
+
 LDSCRIPT = stm32f103x8.ld
 
 DFU_UTIL = dfu-util
