@@ -30,6 +30,7 @@
 //**************************************************************************************************
 
 #include <libopencm3/stm32/gpio.h>
+#include <libopencmsis/core_cm3.h>
 
 /// Processor Clock of the Cortex-M MCU used in the Debug Unit.
 /// This value is used to calculate the SWD/JTAG clock speed.
