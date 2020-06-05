@@ -24,9 +24,11 @@
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/systick.h>
 #include <libopencm3/stm32/usart.h>
+#include <libopencm3/usb/cdc.h>
 #include <stdlib.h>
-#include "itdf.h"
 
+#define JTAG_ENDPOINT_ADDRESS 0x81
+#define SERIAL_ENDPOINT_ADDRESS 0x83
 
 //TODO: Move platform specific code out from main.c
 /* Here it starts */
@@ -174,7 +176,7 @@ static const struct usb_device_descriptor dev = {
 static const struct usb_endpoint_descriptor jtag_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x81,
+	.bEndpointAddress = JTAG_ENDPOINT_ADDRESS,
 	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
 	.wMaxPacketSize = 64,
 	.bInterval = 1,
@@ -205,7 +207,7 @@ static const struct usb_interface_descriptor jtag_iface[] = {{
 static const struct usb_endpoint_descriptor serial_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x83,
+	.bEndpointAddress = SERIAL_ENDPOINT_ADDRESS,
 	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
 	.wMaxPacketSize = 64,
 	.bInterval = 1,
@@ -290,187 +292,90 @@ uint8_t dtr = 1, rts = 1;
 uint8_t handler_buf[8];
 /* 尴尬的双串口，虽然有一个根本没用 */
 
-/* SESPM处理变量 */
-volatile uint8_t sespm_enable = 0;
-
-enum sespm_state_t sespm_state = IDLE;
-uint8_t sespm_bypass = 0;
-
-
-#define C_CLK  48000000
-static void uart_set_baudrate(int itdf_divisor)
+static void cdcacm_set_modem_state(usbd_device *dev, int iface, bool dsr, bool dcd)
 {
-	uint8_t frac[] = {0, 8, 4, 2, 6, 10, 12, 14};
-	int divisor = itdf_divisor & 0x3fff;
-	divisor <<= 4;
-	divisor |= frac[(itdf_divisor >> 14) & 0x07];
-	int baudrate;
-	/* 驱动的workaround */
-	if(itdf_divisor == 0x01)
-	{ //2Mbps
-		baudrate = 2000000;
-	}
-	else if(itdf_divisor == 0x00)
-	{
-		baudrate = 3000000;
-	}
-	else
-	{
-		baudrate = C_CLK / divisor;
-	}
-	if(baudrate < 120 || baudrate > 3000000)
-	{
-		baudrate = 115200;
-	}
-	if(itdf_divisor == 0x2710) //300bps转义为4.5Mbps
-	{
-		baudrate = 4500000;
-	}
-	usart_set_baudrate(USART1, baudrate);
+	char buf[10];
+	struct usb_cdc_notification *notif = (void*)buf;
+	/* We echo signals back to host as notification */
+	notif->bmRequestType = 0xA1;
+	notif->bNotification = USB_CDC_NOTIFY_SERIAL_STATE;
+	notif->wValue = 0;
+	notif->wIndex = iface;
+	notif->wLength = 2;
+	buf[8] = (dsr ? 2 : 0) | (dcd ? 1 : 0);
+	buf[9] = 0;
+	usbd_ep_write_packet(dev, 0x82 + iface, buf, 10);
 }
 
+void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
+{
+	usart_set_baudrate(USART1, coding->dwDTERate);
 
-static int ec_control_request(usbd_device *usbd_dev, struct usb_setup_data *req, uint8_t **buf,
-		uint16_t *len, void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req))
+	if (coding->bParityType)
+		usart_set_databits(USART1, coding->bDataBits + 1);
+	else
+		usart_set_databits(USART1, coding->bDataBits);
+
+	switch(coding->bCharFormat) {
+	case 0:
+		usart_set_stopbits(USART1, USART_STOPBITS_1);
+		break;
+	case 1:
+		usart_set_stopbits(USART1, USART_STOPBITS_1_5);
+		break;
+	case 2:
+		usart_set_stopbits(USART1, USART_STOPBITS_2);
+		break;
+	}
+
+	switch(coding->bParityType) {
+	case 0:
+		usart_set_parity(USART1, USART_PARITY_NONE);
+		break;
+	case 1:
+		usart_set_parity(USART1, USART_PARITY_ODD);
+		break;
+	case 2:
+		usart_set_parity(USART1, USART_PARITY_EVEN);
+		break;
+	}
+}
+
+static int ec_control_request(usbd_device *dev,
+		struct usb_setup_data *req, uint8_t **buf, uint16_t *len,
+		void (**complete)(usbd_device *dev, struct usb_setup_data *req))
 {
 	(void)complete;
 	(void)buf;
-	(void)usbd_dev;
+	(void)dev;
 	(void)len;
 	
-	int port = req->wIndex & 0x03;
-	
-	*len = 0;
+	switch(req->bRequest) {
+	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
+		cdcacm_set_modem_state(dev, req->wIndex, true, true);
+		/* Ignore if not for GDB interface */
+		if(req->wIndex != 0)
+			return USBD_REQ_HANDLED;
 
-	if(req->bmRequestType == ITDF_SET_REQUEST_TYPE)
-	{
-		switch (req->bRequest)
-		{ 
-			case ITDF_SIO_RESET:
-			case ITDF_SIO_SET_FLOW_CTRL: //TODO: 实现流控
-			case ITDF_SIO_SET_DATA: //TODO: 实现校验位，停止位，数据位
-			case ITDF_SIO_SET_EVENT_CHAR:
-			case ITDF_SIO_SET_ERROR_CHAR:
-			case ITDF_SIO_WRITE_EEPROM:
-			case ITDF_SIO_TEST_EEPROM:
-			{
-				return 1; //这个时候只要微笑就好了
-			}
-			case ITDF_SIO_SET_LATENCY_TIMER:
-			{
-				latency_timer[port] = req->wValue & 0xff;
-				return 1;
-			}
-			case ITDF_SIO_SET_BAUD_RATE:
-			{
-				if(port == 2)
-				{//设置波特率
-					uint8_t Baudrate_High = (req->wIndex >> 8);
-					uart_set_baudrate(req->wValue | (Baudrate_High << 16));
-				}
-				return 1;
-			}
-			case ITDF_SIO_MODEM_CTRL:
-			{
-				if(port == 2) /* 忽略掉 SESPM口 */
-				{
-				#if 1
-					uint8_t wValueH = req->wValue >> 8;
-					if(wValueH & ITDF_SIO_SET_DTR_MASK)
-					{
-						if(req->wValue & ITDF_SIO_SET_DTR_MASK)
-						{
-							dtr = 1;
-						}
-						else
-						{
-							dtr = 0;
-						}
-					}
-					if(wValueH & ITDF_SIO_SET_RTS_MASK)
-					{
-						if(req->wValue & ITDF_SIO_SET_RTS_MASK)
-						{
-							rts = 1;
-						}
-						else
-						{
-							rts = 0;
-						}
-					}
-					if(dtr == rts)
-					{
-						dtr_set();
-						rts_set();
-					}
-					if(dtr == 1 && rts == 0)
-					{
-						rts_clr();
-						dtr_clr();
-					}
-					if(dtr == 0 && rts == 1)
-					{
-						rts_set();
-						dtr_clr();
-					}
-				#endif
-				}
-				return 1;
-			}
-			case ITDF_SIO_SET_BITMODE:
-			{
-				if(port == 1) /* SESPM口 */
-				{
-					enum itdf_sespm_mode mode = req->wValue >> 8;
-					//uint8_t bitmask = req->wValue & 0xff;
-					if(mode == BITMODE_RESET)
-					{//BITMODE复位
-						sespm_enable = 0;
-						sespm_bypass = 0;
-						sespm_state = IDLE;
-					}
-					else if(mode == BITMODE_SESPM)
-					{//TODO: 仅支持SESPM
-						sespm_enable = 1;
-						sespm_bypass = 0;
-						sespm_state = IDLE;
-					}
-				}
-				return 1;
-			} //TODO: bootloader reset support
+		return USBD_REQ_HANDLED;
+	case USB_CDC_REQ_SET_LINE_CODING:
+		if(*len < sizeof(struct usb_cdc_line_coding))
+			return USBD_REQ_NOTSUPP;
+
+		switch(req->wIndex) {
+		case 2:
+			usbuart_set_line_coding((struct usb_cdc_line_coding*)*buf);
+			return USBD_REQ_HANDLED;
+			break;
+		case 0:
+			return USBD_REQ_HANDLED; /* Ignore on GDB Port */
+			break;
+		default:
+			return USBD_REQ_NOTSUPP;
 		}
+		break;
 	}
-	else
-	{
-		switch (req->bRequest)
-		{ 
-			case ITDF_SIO_GET_LATENCY_TIMER:
-			{
-				handler_buf[0] = latency_timer[port];
-				*buf = handler_buf;
-				*len = 1; /* 送回latency_timer */
-				return 1;
-			}
-			case ITDF_SIO_GET_MODEM_STATUS:
-			{
-				handler_buf[0] = 0x01;
-				handler_buf[1] = 0x60;
-				*buf = handler_buf;
-				*len = 2; /* Modem status */
-				return 1;
-			}
-			case ITDF_SIO_READ_EEPROM: /* 直接全部返回FF */
-			{
-				int eeprom_ar = req->wIndex & 0x3f;
-				handler_buf[0] = itdf_eeprom[eeprom_ar];
-				handler_buf[1] = itdf_eeprom[eeprom_ar] >> 8;
-				*len = 2;
-				*buf = handler_buf;
-				return 1;
-			}
-		}	
-	}
-	return 0; //TODO: 实现所有ITDF功能
+	return USBD_REQ_NOTSUPP;
 }
 
 /* USB数据处理开始 */
@@ -604,281 +509,6 @@ uint8_t jtag_recv_len;
 uint8_t jtag_recv_i;
 #endif
 
-
-static void jtag_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
-{
-	(void)ep;
-#if (!SERIAL_IN_SINGLEBUF)
-	uint8_t buf[64];
-	int len = usbd_ep_read_packet(usbd_dev, 0x02, buf, 64);
-	
-	if(len)
-	{
-		ring_write(&jtag_in_ring, buf, len);
-	}
-	
-	if(ring_remain(&jtag_in_ring) < 128) //缓冲区满
-	{
-		usbd_ep_nak_set(usbd_dev, 0x02, 1); //阻塞
-	}
-#else
-	#if 0
-	jtag_recv_len = usbd_ep_read_packet(usbd_dev, 0x02, jtag_recv_buf, 64);
-	if (jtag_recv_len)
-	{
-		ring_write(&jtag_out_ring, jtag_recv_buf, jtag_recv_len);
-
-	}
-	#else
-		uint8_t buf[64];
-		static uint8_t sespm_cmd = 0;
-		static uint16_t sespm_length = 0;
-		static uint8_t sespm_read = 0;
-		
-		int len = usbd_ep_read_packet(usbd_dev, 0x02, buf, 64);
-		int i;
-		gpio_set(GPIOB, GPIO2);
-		for(i = 0; i < len; i++)
-		{
-			uint8_t jtag_data = buf[i];
-			switch(sespm_state)
-			{
-				case IDLE:
-				{
-					sespm_cmd = jtag_data;
-					if(sespm_cmd & ITDF_SIE_SPECIAL)
-					{ //特殊命令
-						switch(sespm_cmd)
-						{
-							case 0x80:
-							{ /* 设置IO 状态 */
-								sespm_state = BUS_DATA;
-								break;
-							}
-							case 0x81:
-							{ /* 读取 */
-								uint8_t report = 0;
-								if(GPIOA_IDR & GPIO5)
-									report |= 0x01;
-								if(GPIOA_IDR & GPIO6)
-									report |= 0x04;
-								if(GPIOA_IDR & GPIO7)
-									report |= 0x02;
-								if(GPIOB_IDR & GPIO14)
-									report |= 0x08;
-								ring_write_ch(&jtag_out_ring, report);
-								break;
-							}
-							case 0x84:
-							{ /* Bypass On */
-								sespm_bypass = 1;
-								break;
-							}
-							case 0x85:
-							{ /* Bypass Off */
-								sespm_bypass = 0;
-								break;
-							}
-							case 0x86:
-							{ //TODO: Divisor support
-								break;
-							}
-							default:
-							{ /* 错误命令 */
-bad_cmd:
-								ring_write_ch(&jtag_out_ring, 0xfa);
-								ring_write_ch(&jtag_out_ring, sespm_cmd);
-								break;
-							}
-						}
-					}
-					else
-					{ //TODO: 常规命令，必须LSB first，负写正读
-						if (!(sespm_cmd & ITDF_SIE_WRITE_MCE)) 
-							goto bad_cmd;
-						if (sespm_cmd & ITDF_SIE_READ_MCE)
-							goto bad_cmd;
-						if (!(sespm_cmd & ITDF_SIE_LSB_FIRST))
-							goto bad_cmd;
-					// 只允许TDI/TMS 二选一
-						if ((sespm_cmd & ITDF_SIE_WRITE_TDI) &&
-							(sespm_cmd & ITDF_SIE_WRITE_TMS))
-							goto bad_cmd;
-					/* 是否需要读取 */	
-						sespm_read = sespm_cmd & ITDF_SIE_READ_TDO;
-					/* 写 TDI */	
-						if (sespm_cmd & ITDF_SIE_WRITE_TDI)
-						{
-							if (sespm_cmd & ITDF_SIE_BIT_MODE)
-								sespm_state = TDI_RECV_LENG_BIT;
-							else
-								sespm_state = TDI_RECV_LENGL_BYTE;
-						}
-						
-						if (sespm_cmd & ITDF_SIE_WRITE_TMS)
-						{
-							if (sespm_cmd & ITDF_SIE_BIT_MODE)
-								sespm_state = TMS_RECV_LENG_BIT;
-							else
-							{ // We should never reached here
-								goto bad_cmd;
-							}
-						}
-					}
-					
-					break;
-				} //IDLE
-				case BUS_DATA: /* TCK TDI TDO TMS */
-				{
-					if(jtag_data & 0x02)
-						gpio_set(GPIOA, GPIO7); //TDI
-					else
-						gpio_clear(GPIOA, GPIO7);
-					if(jtag_data & 0x04)
-						gpio_set(GPIOA, GPIO6);
-					else
-						gpio_clear(GPIOA, GPIO6); //TDO
-					if(jtag_data & 0x08)
-						gpio_set(GPIOB, GPIO14); //TMS
-					else
-						gpio_clear(GPIOB, GPIO14);
-					
-					if(jtag_data & 0x01)
-						gpio_set(GPIOA, GPIO5);
-					else
-						gpio_clear(GPIOA, GPIO5); //TCK
-					sespm_state = BUS_DIR;
-					break;
-				}
-				case BUS_DIR:
-				{
-					sespm_state = IDLE;
-					break;
-				}
-				case TDI_RECV_LENGL_BYTE:
-				case TDI_RECV_LENG_BIT:
-				case TMS_RECV_LENG_BIT:
-				{
-					sespm_length = jtag_data;
-					sespm_state ++;
-					break;
-				}
-				case TDI_RECV_LENGH_BYTE:
-				{
-					sespm_length |= (jtag_data << 8);
-					sespm_state ++;
-					break;
-				}
-				case TDI_DATA_BYTE:
-				{
-					uint8_t recv_data = 0;
-					uint8_t send_data = jtag_data;
-					int j;
-					for(j = 0; j < 8; j++)
-					{ // TCK 1 - 0 - 1
-						if(send_data & 0x01)
-							gpio_set(GPIOA, GPIO7); //TDI
-						else
-							gpio_clear(GPIOA, GPIO7);
-							
-						gpio_clear(GPIOA, GPIO5); //TCK
-						DELAY();
-						gpio_set(GPIOA, GPIO5);
-						
-						recv_data >>= 1;
-						send_data >>= 1;
-						if(GPIOA_IDR & GPIO6) //TDO
-							recv_data |= 0x80;
-					}
-					if(sespm_read)
-					{
-						if(sespm_bypass)
-							ring_write_ch(&jtag_out_ring, jtag_data);
-						else
-							ring_write_ch(&jtag_out_ring, recv_data);
-					}
-						
-					if (sespm_length == 0)
-						sespm_state = IDLE;
-					else
-						sespm_length --;
-					break;
-				}
-				case TDI_DATA_BIT:
-				{
-					uint8_t recv_data = 0;
-					uint8_t send_data = jtag_data;
-					int j;
-					for(j = 0; j <= sespm_length; j++)
-					{
-						if(send_data & 0x01)
-							gpio_set(GPIOA, GPIO7); //TDI
-						else
-							gpio_clear(GPIOA, GPIO7);
-						
-						gpio_clear(GPIOA, GPIO5); //TCK
-						DELAY();
-						gpio_set(GPIOA, GPIO5);
-						
-						send_data >>= 1;
-						
-						if(GPIOA_IDR & GPIO6) //TDO
-							recv_data |= (1 << j);
-					}
-					if(sespm_read)
-					{
-						if(sespm_bypass)
-							ring_write_ch(&jtag_out_ring, jtag_data);
-						else
-							ring_write_ch(&jtag_out_ring, recv_data);
-					}
-					
-					sespm_state = IDLE;				
-					break;
-				}
-				case TMS_DATA_BIT:
-				{
-					uint8_t recv_data = 0;
-					uint8_t send_data = jtag_data;
-					int j;
-					if(send_data & 0x80)
-						gpio_set(GPIOA, GPIO7); //TDI
-					else
-						gpio_clear(GPIOA, GPIO7);
-					for(j = 0; j <= sespm_length; j++)
-					{
-						if(send_data & 0x01)
-							gpio_set(GPIOB, GPIO14); //TMS
-						else
-							gpio_clear(GPIOB, GPIO14);
-						
-						gpio_clear(GPIOA, GPIO5); //TCK
-						DELAY();
-						gpio_set(GPIOA, GPIO5);
-						
-						send_data >>= 1;
-						
-						if(GPIOA_IDR & GPIO6)
-							recv_data |= (1 << j); //TDO
-					}
-					if(sespm_read)
-					{
-						if(sespm_bypass)
-							ring_write_ch(&jtag_out_ring, jtag_data);
-						else
-							ring_write_ch(&jtag_out_ring, recv_data);
-					}
-					
-					sespm_state = IDLE;				
-					break;					
-				}
-			}
-		}
-	#endif
-#endif
-}
-
-
 static void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
@@ -925,15 +555,16 @@ static void ec_set_config(usbd_device *usbd_dev, uint16_t wValue)
 	
 	usbd_register_control_callback(
 				usbd_dev,
-				ITDF_SET_REQUEST_TYPE,
-				ITDF_SET_REQUEST_TYPE,
+				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
+				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
 				ec_control_request);
 
-	usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64,
+	usbd_ep_setup(usbd_dev, JTAG_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
 			NULL);
-	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
+	//TODO: Setup DAP Endpoint here
+	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
 
-	usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_BULK, 64,
+	usbd_ep_setup(usbd_dev, SERIAL_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
 			NULL);
 	usbd_ep_setup(usbd_dev, 0x04, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
 	
@@ -982,21 +613,21 @@ void sys_tick_handler(void)
 
 static void usb_packet_handler(void)
 { //防止被USB中断抢占
-	if(ring_size(&serial_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, 0x83)) //需要接收 (串口)
+	if(ring_size(&serial_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS)) //需要接收 (串口)
 	{
 		ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读62个byte
-		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, 0x83, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
+		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
 		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, 0x83, bulkout_buf[1], 64);
+		usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 64);
 		//asm("cpsie i");
 	}
 
-	if(ring_size(&jtag_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, 0x81)) //需要接收 (SESPM)
+	if(ring_size(&jtag_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS)) //需要接收 (SESPM)
 	{
 		ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读62个byte
-		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, 0x81, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发出去
+		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发出去
 		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, 0x81, bulkout_buf[0], 64);
+		usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS, bulkout_buf[0], 64);
 		//asm("cpsie i");
 	}	
 	
@@ -1004,20 +635,20 @@ static void usb_packet_handler(void)
 	{
 		last_send = timer_count;
 		int len;
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, 0x81))
+		if(st_usbfs_ep_in_ready(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS))
 		{
 			len = ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读N个byte
-			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, 0x81, bulkout_buf[0], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
+			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[0], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
 			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, 0x81, bulkout_buf[0], 2 + len);
+			usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS, bulkout_buf[0], 2 + len);
 			//asm("cpsie i");
 		}
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, 0x83))
+		if(st_usbfs_ep_in_ready(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS))
 		{
 			len = ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读N个byte
-			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, 0x83, bulkout_buf[1], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发串口
+			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发串口
 			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, 0x83, bulkout_buf[1], 2 + len);
+			usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 2 + len);
 			//asm("cpsie i");
 		}
 	}
@@ -1106,7 +737,6 @@ int main(void)
 		//usbd_poll(usbd_dev_handler);
 		if(attached)
 			usb_packet_handler();
-		//sespm_process();
 	}
 
 	return 0;
