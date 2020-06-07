@@ -20,7 +20,8 @@
 
 BINARY = ec
 
-OBJS = usb_private.o
+OBJS = usb_private.o \
+        usb.o
 
 DAPLINK_OBJS = ../cmsis-dap/src/DAP_vendor.o \
 				../cmsis-dap/src/DAP.o \

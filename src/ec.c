@@ -24,11 +24,14 @@
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/systick.h>
 #include <libopencm3/stm32/usart.h>
+#include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
 #include <stdlib.h>
 
-#define JTAG_ENDPOINT_ADDRESS 0x81
-#define SERIAL_ENDPOINT_ADDRESS 0x83
+#include "usb.h"
+
+extern usbd_device *usbd_dev_handler;
+extern volatile uint8_t attached;
 
 //TODO: Move platform specific code out from main.c
 /* Here it starts */
@@ -147,141 +150,19 @@ static void gpio_setup(void)
 	//暂且用Bitbang模拟SESPM
 }
 
-/* Here it ends */
-
-/* USB process */
-
-#include <libopencm3/usb/usbd.h>
-#include "usb_private.h"
-
-usbd_device *usbd_dev_handler;
-
-static const struct usb_device_descriptor dev = {
-	.bLength = USB_DT_DEVICE_SIZE,
-	.bDescriptorType = USB_DT_DEVICE,
-	.bcdUSB = 0x0200,
-	.bDeviceClass = 0,
-	.bDeviceSubClass = 0,
-	.bDeviceProtocol = 0,
-	.bMaxPacketSize0 = 32,
-	.idVendor = 0x0403,
-	.idProduct = 0x6010, /* Specific VID/PID to make debugger happy */
-	.bcdDevice = 0x0500,
-	.iManufacturer = 1,
-	.iProduct = 2,
-	.iSerialNumber = 0,
-	.bNumConfigurations = 1,
-};
-
-static const struct usb_endpoint_descriptor jtag_endp[] = {{
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = JTAG_ENDPOINT_ADDRESS,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-}, {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x02,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-}};
 
 
-static const struct usb_interface_descriptor jtag_iface[] = {{
-	.bLength = USB_DT_INTERFACE_SIZE,
-	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 0,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
-	.bInterfaceClass = USB_CLASS_VENDOR,
-	.bInterfaceSubClass = USB_CLASS_VENDOR,
-	.bInterfaceProtocol = USB_CLASS_VENDOR,
-	.iInterface = 2,
-
-	.endpoint = jtag_endp,
-}};
-
-static const struct usb_endpoint_descriptor serial_endp[] = {{
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = SERIAL_ENDPOINT_ADDRESS,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-}, {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x04,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-}};
 
 
-static const struct usb_interface_descriptor serial_iface[] = {{
-	.bLength = USB_DT_INTERFACE_SIZE,
-	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 1,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
-	.bInterfaceClass = USB_CLASS_VENDOR,
-	.bInterfaceSubClass = USB_CLASS_VENDOR,
-	.bInterfaceProtocol = USB_CLASS_VENDOR,
-	.iInterface = 2,
-
-	.endpoint = serial_endp,
-}};
-
-static const struct usb_interface ifaces[] = {{
-	.num_altsetting = 1,
-	.altsetting = jtag_iface,
-}, {
-	.num_altsetting = 1,
-	.altsetting = serial_iface,
-}};
-
-static const struct usb_config_descriptor config = {
-	.bLength = USB_DT_CONFIGURATION_SIZE,
-	.bDescriptorType = USB_DT_CONFIGURATION,
-	.wTotalLength = 0,
-	.bNumInterfaces = 2,
-	.bConfigurationValue = 1,
-	.iConfiguration = 0,
-	.bmAttributes = 0x80,
-	.bMaxPower = 0x32,
-
-	.interface = ifaces,
-};
-
-static const char *usb_strings[] = {
-	"Open-EC",
-	"USB Debugger"
-};
-
-/* Buffer to be used for control requests. */
-uint8_t usbd_control_buffer[64];
-
-/* USB interrupt handler */
-void usb_wakeup_isr(void)
-	__attribute__ ((alias ("usb_int_relay")));
-
-void usb_hp_can_tx_isr(void)
-	__attribute__ ((alias ("usb_int_relay")));
-
-void usb_lp_can_rx0_isr(void)
-	__attribute__ ((alias ("usb_int_relay")));
 
 
-static void usb_int_relay(void) 
-{
-	usbd_poll(usbd_dev_handler);
-}
 
 
-/* Control request handler */
+
+
+
+
+
 
 
 uint8_t bulkout_buf[2][64] = {{0x01, 0x60}, {0x01, 0x60}};
@@ -289,96 +170,10 @@ volatile uint8_t latency_timer[2] = {3, 3};
 
 uint8_t dtr = 1, rts = 1;
 
-uint8_t handler_buf[8];
-/* 尴尬的双串口，虽然有一个根本没用 */
 
-static void cdcacm_set_modem_state(usbd_device *dev, int iface, bool dsr, bool dcd)
-{
-	char buf[10];
-	struct usb_cdc_notification *notif = (void*)buf;
-	/* We echo signals back to host as notification */
-	notif->bmRequestType = 0xA1;
-	notif->bNotification = USB_CDC_NOTIFY_SERIAL_STATE;
-	notif->wValue = 0;
-	notif->wIndex = iface;
-	notif->wLength = 2;
-	buf[8] = (dsr ? 2 : 0) | (dcd ? 1 : 0);
-	buf[9] = 0;
-	usbd_ep_write_packet(dev, 0x82 + iface, buf, 10);
-}
 
-void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
-{
-	usart_set_baudrate(USART1, coding->dwDTERate);
 
-	if (coding->bParityType)
-		usart_set_databits(USART1, coding->bDataBits + 1);
-	else
-		usart_set_databits(USART1, coding->bDataBits);
 
-	switch(coding->bCharFormat) {
-	case 0:
-		usart_set_stopbits(USART1, USART_STOPBITS_1);
-		break;
-	case 1:
-		usart_set_stopbits(USART1, USART_STOPBITS_1_5);
-		break;
-	case 2:
-		usart_set_stopbits(USART1, USART_STOPBITS_2);
-		break;
-	}
-
-	switch(coding->bParityType) {
-	case 0:
-		usart_set_parity(USART1, USART_PARITY_NONE);
-		break;
-	case 1:
-		usart_set_parity(USART1, USART_PARITY_ODD);
-		break;
-	case 2:
-		usart_set_parity(USART1, USART_PARITY_EVEN);
-		break;
-	}
-}
-
-static int ec_control_request(usbd_device *dev,
-		struct usb_setup_data *req, uint8_t **buf, uint16_t *len,
-		void (**complete)(usbd_device *dev, struct usb_setup_data *req))
-{
-	(void)complete;
-	(void)buf;
-	(void)dev;
-	(void)len;
-	
-	switch(req->bRequest) {
-	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
-		cdcacm_set_modem_state(dev, req->wIndex, true, true);
-		/* Ignore if not for GDB interface */
-		if(req->wIndex != 0)
-			return USBD_REQ_HANDLED;
-
-		return USBD_REQ_HANDLED;
-	case USB_CDC_REQ_SET_LINE_CODING:
-		if(*len < sizeof(struct usb_cdc_line_coding))
-			return USBD_REQ_NOTSUPP;
-
-		switch(req->wIndex) {
-		case 2:
-			usbuart_set_line_coding((struct usb_cdc_line_coding*)*buf);
-			return USBD_REQ_HANDLED;
-			break;
-		case 0:
-			return USBD_REQ_HANDLED; /* Ignore on GDB Port */
-			break;
-		default:
-			return USBD_REQ_NOTSUPP;
-		}
-		break;
-	}
-	return USBD_REQ_NOTSUPP;
-}
-
-/* USB数据处理开始 */
 
 typedef int32_t ring_size_t;
 
@@ -509,7 +304,7 @@ uint8_t jtag_recv_len;
 uint8_t jtag_recv_i;
 #endif
 
-static void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
+void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
 #if SERIAL_IN_SINGLEBUF
@@ -543,32 +338,6 @@ static void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 		//USART_CR1(USART1) |= USART_CR1_TXEIE;//开USART1空发送中断
 	}
 #endif
-}
-
-/* 数据处理结束 */
-volatile uint8_t attached = 0;
-
-static void ec_set_config(usbd_device *usbd_dev, uint16_t wValue)
-{
-	(void)wValue;
-	
-	
-	usbd_register_control_callback(
-				usbd_dev,
-				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
-				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
-				ec_control_request);
-
-	usbd_ep_setup(usbd_dev, JTAG_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
-	//TODO: Setup DAP Endpoint here
-	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
-
-	usbd_ep_setup(usbd_dev, SERIAL_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
-	usbd_ep_setup(usbd_dev, 0x04, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
-	
-	attached = 1;
 }
 
 static void interrupt_setup(void)
@@ -719,8 +488,7 @@ int main(void)
 
 	gpio_clear(GPIOA, GPIO8); //关USB上拉 
 	
-	usbd_dev_handler = usbd_init(&st_usbfs_v1_usb_driver, &dev, &config, usb_strings, 2, usbd_control_buffer, sizeof(usbd_control_buffer));
-	usbd_register_set_config_callback(usbd_dev_handler, ec_set_config);
+	usb_init();
 	
 	ring_init_all(); //开环形缓冲区
 	uart_setup();
@@ -734,9 +502,10 @@ int main(void)
 		
 	while(1)
 	{
-		//usbd_poll(usbd_dev_handler);
-		if(attached)
-			usb_packet_handler();
+		usbd_poll(usbd_dev_handler);
+//		if(attached)
+//			usb_packet_handler();
+		__asm__("nop");
 	}
 
 	return 0;
