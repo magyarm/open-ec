@@ -43,10 +43,10 @@ ST_FLASH = st-flash
 USB_ID	 = 1d50:6017
 
 LIBNAME		?= opencm3_stm32f1
-DEFS		?= -DSTM32F1 -O3
+DEFS		?= -DSTM32F1 -g -ggdb
 FP_FLAGS    ?= -msoft-float
 ARCH_FLAGS	?= -mthumb -mcpu=cortex-m3 $(FP_FLAGS) -mfix-cortex-m3-ldrd
-LDFLAGS = -Wl,-Ttext=0x8002000
+LDFLAGS = -Wl,-Ttext=0x8002000 -Wl,--print-memory-usage
 
 include ../libopencm3.rules.mk
 
