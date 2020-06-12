@@ -53,7 +53,7 @@ static const struct usb_endpoint_descriptor jtag_endp[] = {
 	{
 	.bLength = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = JTAG_ENDPOINT_ADDRESS,
+	.bEndpointAddress = CDCACM_GDB_DATA_ENDPOINT,
 	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
 	.wMaxPacketSize = 64,
 	.bInterval = 1,
@@ -77,53 +77,128 @@ static const struct usb_interface_descriptor jtag_iface[] = {
 	.bInterfaceClass = USB_CLASS_VENDOR,
 	.bInterfaceSubClass = USB_CLASS_VENDOR,
 	.bInterfaceProtocol = USB_CLASS_VENDOR,
-	.iInterface = 2,
+	.iInterface = 1,
 
 	.endpoint = jtag_endp,
 	}
 };
 
-static const struct usb_endpoint_descriptor uart_comm_endpoint[] = {
-	{
+/* Serial ACM interface */
+static const struct usb_endpoint_descriptor uart_comm_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = SERIAL_ENDPOINT_ADDRESS,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-	}, {
+	.bEndpointAddress = CDCACM_UART_COMM_ENDPOINT,
+	.bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT,
+	.wMaxPacketSize = 16,
+	.bInterval = 255,
+}};
+
+static const struct usb_endpoint_descriptor uart_data_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x04,
+	.bEndpointAddress = CDCACM_UART_ENDPOINT,
 	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
+	.wMaxPacketSize = CDCACM_PACKET_SIZE,
 	.bInterval = 1,
-	}
+}, {
+	.bLength = USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType = USB_DT_ENDPOINT,
+	.bEndpointAddress = CDCACM_UART_DATA_ENDPOINT,
+	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
+	.wMaxPacketSize = CDCACM_PACKET_SIZE,
+	.bInterval = 1,
+}};
+
+static const struct {
+	struct usb_cdc_header_descriptor header;
+	struct usb_cdc_call_management_descriptor call_mgmt;
+	struct usb_cdc_acm_descriptor acm;
+	struct usb_cdc_union_descriptor cdc_union;
+} __attribute__((packed)) uart_cdcacm_functional_descriptors = {
+	.header = {
+		.bFunctionLength = sizeof(struct usb_cdc_header_descriptor),
+		.bDescriptorType = CS_INTERFACE,
+		.bDescriptorSubtype = USB_CDC_TYPE_HEADER,
+		.bcdCDC = 0x0110,
+	},
+	.call_mgmt = {
+		.bFunctionLength =
+			sizeof(struct usb_cdc_call_management_descriptor),
+		.bDescriptorType = CS_INTERFACE,
+		.bDescriptorSubtype = USB_CDC_TYPE_CALL_MANAGEMENT,
+		.bmCapabilities = 0,
+		.bDataInterface = 3,
+	},
+	.acm = {
+		.bFunctionLength = sizeof(struct usb_cdc_acm_descriptor),
+		.bDescriptorType = CS_INTERFACE,
+		.bDescriptorSubtype = USB_CDC_TYPE_ACM,
+		.bmCapabilities = 2, /* SET_LINE_CODING supported*/
+	},
+	.cdc_union = {
+		.bFunctionLength = sizeof(struct usb_cdc_union_descriptor),
+		.bDescriptorType = CS_INTERFACE,
+		.bDescriptorSubtype = USB_CDC_TYPE_UNION,
+		.bControlInterface = 2,
+		.bSubordinateInterface0 = 3,
+	 }
 };
 
 static const struct usb_interface_descriptor uart_comm_iface[] = {
 	{
 	.bLength = USB_DT_INTERFACE_SIZE,
 	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 1,
+	.bInterfaceNumber = 2,
 	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
+	.bNumEndpoints = 1,
 	.bInterfaceClass = USB_CLASS_CDC,
 	.bInterfaceSubClass = USB_CDC_SUBCLASS_ACM,
 	.bInterfaceProtocol = USB_CDC_PROTOCOL_AT,
-	.iInterface = 2,
+	.iInterface = 5,
 
-	.endpoint = uart_comm_endpoint,
+	.endpoint = uart_comm_endp,
+
+	.extra = &uart_cdcacm_functional_descriptors,
+	.extralen = sizeof(uart_cdcacm_functional_descriptors)
 	}
+};
+
+static const struct usb_interface_descriptor uart_data_iface[] = {{
+	.bLength = USB_DT_INTERFACE_SIZE,
+	.bDescriptorType = USB_DT_INTERFACE,
+	.bInterfaceNumber = 3,
+	.bAlternateSetting = 0,
+	.bNumEndpoints = 2,
+	.bInterfaceClass = USB_CLASS_DATA,
+	.bInterfaceSubClass = 0,
+	.bInterfaceProtocol = 0,
+	.iInterface = 0,
+
+	.endpoint = uart_data_endp,
+}};
+
+static const struct usb_iface_assoc_descriptor uart_assoc = {
+	.bLength = USB_DT_INTERFACE_ASSOCIATION_SIZE,
+	.bDescriptorType = USB_DT_INTERFACE_ASSOCIATION,
+	.bFirstInterface = 2,
+	.bInterfaceCount = 2,
+	.bFunctionClass = USB_CLASS_CDC,
+	.bFunctionSubClass = USB_CDC_SUBCLASS_ACM,
+	.bFunctionProtocol = USB_CDC_PROTOCOL_AT,
+	.iFunction = 0,
 };
 
 static const struct usb_interface ifaces[] = {
 	{
-	.num_altsetting = 1,
-	.altsetting = jtag_iface,
+			.num_altsetting = 1,
+			.altsetting = jtag_iface,
 	}, {
-	.num_altsetting = 1,
-	.altsetting = uart_comm_iface,
+			.num_altsetting = 1,
+			.iface_assoc = &uart_assoc,
+			.altsetting = uart_comm_iface,
+	}, {
+			.num_altsetting = 1,
+			.altsetting = uart_data_iface,
 	}
 };
 
@@ -136,7 +211,7 @@ static const struct usb_config_descriptor config = {
 	.bLength = USB_DT_CONFIGURATION_SIZE,
 	.bDescriptorType = USB_DT_CONFIGURATION,
 	.wTotalLength = 0,
-	.bNumInterfaces = 2,
+	.bNumInterfaces = 3,
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
 	.bmAttributes = 0x80,
@@ -269,20 +344,20 @@ static void usb_config_callback(usbd_device *usbd_dev, uint16_t wValue)
 {
 	(void)wValue;
 
+	usbd_ep_setup(usbd_dev, CDCACM_GDB_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
+			NULL);
+	//TODO: Setup DAP Endpoint here
+	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
+
+	usbd_ep_setup(usbd_dev, CDCACM_UART_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
+			NULL);
+	usbd_ep_setup(usbd_dev, 0x04, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
+
 	usbd_register_control_callback(
 				usbd_dev,
 				USB_REQ_TYPE_CLASS | USB_REQ_TYPE_INTERFACE,
 				USB_REQ_TYPE_TYPE | USB_REQ_TYPE_RECIPIENT,
 				ec_control_request);
-
-	usbd_ep_setup(usbd_dev, JTAG_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
-	//TODO: Setup DAP Endpoint here
-	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
-
-	usbd_ep_setup(usbd_dev, SERIAL_ENDPOINT_ADDRESS, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
-	usbd_ep_setup(usbd_dev, 0x04, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
 
 	attached = 1;
 }

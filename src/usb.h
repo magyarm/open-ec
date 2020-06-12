@@ -8,8 +8,16 @@
 #ifndef SRC_USB_H_
 #define SRC_USB_H_
 
-#define JTAG_ENDPOINT_ADDRESS 0x81
-#define SERIAL_ENDPOINT_ADDRESS 0x83
+#define CDCACM_GDB_ENDPOINT	    1
+#define CDCACM_UART_ENDPOINT	4
+
+#define CDCACM_GDB_DATA_ENDPOINT    0x81
+#define CDCACM_GDB_COMM_ENDPOINT    0x82
+#define CDCACM_UART_DATA_ENDPOINT   0x84
+#define CDCACM_UART_COMM_ENDPOINT   0x85
+
+
+#define CDCACM_PACKET_SIZE 	64
 
 void exti15_10_isr(void);
 char *serialno_read(char *s);

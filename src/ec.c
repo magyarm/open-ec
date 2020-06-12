@@ -382,21 +382,21 @@ void sys_tick_handler(void)
 
 static void usb_packet_handler(void)
 { //防止被USB中断抢占
-	if(ring_size(&serial_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS)) //需要接收 (串口)
+	if(ring_size(&serial_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT)) //需要接收 (串口)
 	{
 		ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读62个byte
 		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
 		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 64);
+		usbd_ep_write_packet(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT, bulkout_buf[1], 64);
 		//asm("cpsie i");
 	}
 
-	if(ring_size(&jtag_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS)) //需要接收 (SESPM)
+	if(ring_size(&jtag_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT)) //需要接收 (SESPM)
 	{
 		ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读62个byte
 		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发出去
 		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS, bulkout_buf[0], 64);
+		usbd_ep_write_packet(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT, bulkout_buf[0], 64);
 		//asm("cpsie i");
 	}	
 	
@@ -404,20 +404,20 @@ static void usb_packet_handler(void)
 	{
 		last_send = timer_count;
 		int len;
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS))
+		if(st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT))
 		{
 			len = ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读N个byte
 			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[0], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
 			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT_ADDRESS, bulkout_buf[0], 2 + len);
+			usbd_ep_write_packet(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT, bulkout_buf[0], 2 + len);
 			//asm("cpsie i");
 		}
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS))
+		if(st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT))
 		{
 			len = ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读N个byte
 			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发串口
 			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 2 + len);
+			usbd_ep_write_packet(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT, bulkout_buf[1], 2 + len);
 			//asm("cpsie i");
 		}
 	}
@@ -503,8 +503,8 @@ int main(void)
 	while(1)
 	{
 		usbd_poll(usbd_dev_handler);
-//		if(attached)
-//			usb_packet_handler();
+		if(attached)
+			usb_packet_handler();
 		__asm__("nop");
 	}
 
