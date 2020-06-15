@@ -106,7 +106,7 @@ static const struct {
 		.bDescriptorType = CS_INTERFACE,
 		.bDescriptorSubtype = USB_CDC_TYPE_UNION,
 		.bControlInterface = UART_COMM_IFACE,
-		.bSubordinateInterface0 = 3,
+		.bSubordinateInterface0 = UART_DATA_IFACE,
 	 }
 };
 
@@ -120,7 +120,7 @@ static const struct usb_interface_descriptor uart_comm_iface[] = {
 	.bInterfaceClass = USB_CLASS_CDC,
 	.bInterfaceSubClass = USB_CDC_SUBCLASS_ACM,
 	.bInterfaceProtocol = USB_CDC_PROTOCOL_AT,
-	.iInterface = 5,
+	.iInterface = 0,
 
 	.endpoint = uart_comm_endp,
 
@@ -156,12 +156,12 @@ static const struct usb_iface_assoc_descriptor uart_assoc = {
 
 static const struct usb_interface ifaces[] = {
 	{
-			.num_altsetting = 1,
-			.iface_assoc = &uart_assoc,
-			.altsetting = uart_comm_iface,
+		.num_altsetting = 1,
+		.iface_assoc = &uart_assoc,
+		.altsetting = uart_comm_iface,
 	}, {
-			.num_altsetting = 1,
-			.altsetting = uart_data_iface,
+		.num_altsetting = 1,
+		.altsetting = uart_data_iface,
 	}
 };
 
@@ -211,7 +211,7 @@ static void cdcacm_set_modem_state(usbd_device *dev, int iface, bool dsr, bool d
 	notif->wLength = 2;
 	buf[8] = (dsr ? 2 : 0) | (dcd ? 1 : 0);
 	buf[9] = 0;
-	usbd_ep_write_packet(dev, 0x82 + iface, buf, 10);
+	usbd_ep_write_packet(dev, CDCACM_UART_DATA_ENDPOINT + iface, buf, 10);
 }
 
 void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
@@ -285,9 +285,6 @@ static int ec_control_request(usbd_device *dev,
 	return USBD_REQ_NOTSUPP;
 }
 
-
-
-
 void exti15_10_isr(void)
 {
 	if (gpio_get(USB_VBUS_PORT, USB_VBUS_PIN)) {
@@ -313,9 +310,9 @@ static void usb_config_callback(usbd_device *usbd_dev, uint16_t wValue)
 	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
 
 	usbd_ep_setup(usbd_dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK,
-			CDCACM_PACKET_SIZE / 2, NULL);
+			CDCACM_PACKET_SIZE, serial_data_rx_cb);
 	usbd_ep_setup(usbd_dev, CDCACM_UART_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK,
-			CDCACM_PACKET_SIZE, serial_data_rx_cb); //Serial
+			CDCACM_PACKET_SIZE, NULL); //Serial
 	usbd_ep_setup(usbd_dev, CDCACM_UART_COMM_ENDPOINT, USB_ENDPOINT_ATTR_INTERRUPT,
 			16, NULL);
 

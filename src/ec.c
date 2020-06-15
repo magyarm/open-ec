@@ -253,7 +253,7 @@ static void usb_packet_handler(void)
 		}
 		/* advance fifo out pointer by amount written */
 		buf_rx_out += usbd_ep_write_packet(usbd_dev_handler,
-				CDCACM_UART_ENDPOINT, packet_buf, packet_size);
+				CDCACM_UART_DATA_ENDPOINT, packet_buf, packet_size);
 		buf_rx_out %= FIFO_SIZE;
 	}
 }
