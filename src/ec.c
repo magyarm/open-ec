@@ -30,8 +30,34 @@
 
 #include "usb.h"
 
+#define FIFO_SIZE 256
+
+#define SERIAL_IN_SINGLEBUF 1
+#define UART_SEND_BLOCKING
+
+
+#define dtr_set() gpio_set(GPIOB, GPIO15); gpio_set(GPIOB, GPIO10)
+#define dtr_clr() gpio_clear(GPIOB, GPIO15); gpio_clear(GPIOB, GPIO10)
+
+#define rts_set() gpio_set(GPIOA, GPIO2); gpio_set(GPIOB, GPIO11)
+#define rts_clr() gpio_clear(GPIOA, GPIO2); gpio_clear(GPIOB, GPIO11)
+
 extern usbd_device *usbd_dev_handler;
 extern volatile uint8_t attached;
+
+volatile uint8_t latency_timer[2] = {3, 3};
+
+/* RX Fifo buffer */
+static uint8_t buf_rx[FIFO_SIZE];
+/* Fifo in pointer, writes assumed to be atomic, should be only incremented within RX ISR */
+static uint8_t buf_rx_in;
+/* Fifo out pointer, writes assumed to be atomic, should be only incremented outside RX ISR */
+static uint8_t buf_rx_out;
+
+uint8_t dtr = 1, rts = 1;
+
+volatile uint16_t timer_count = 0;
+volatile uint16_t last_send = 0;
 
 //TODO: Move platform specific code out from main.c
 /* Here it starts */
@@ -95,7 +121,6 @@ static void rcc_clock_setup_in_hse_24mhz_out_72mhz(void)
 	
 }
 
-
 static void clock_setup(void)
 {
 	rcc_clock_setup_in_hse_24mhz_out_72mhz();
@@ -109,13 +134,6 @@ static void clock_setup(void)
 	
 	SCB_VTOR = 0x08002000; 
 }
-
-
-#define dtr_set() gpio_set(GPIOB, GPIO15); gpio_set(GPIOB, GPIO10)
-#define dtr_clr() gpio_clear(GPIOB, GPIO15); gpio_clear(GPIOB, GPIO10)
-
-#define rts_set() gpio_set(GPIOA, GPIO2); gpio_set(GPIOB, GPIO11)
-#define rts_clr() gpio_clear(GPIOA, GPIO2); gpio_clear(GPIOB, GPIO11)
 
 static void gpio_setup(void)
 {		
@@ -298,7 +316,6 @@ int main(void)
 	for (i = 0; i < 0x80000; i++)
 		__asm__("nop");
 	gpio_set(GPIOA, GPIO8);//开USB上拉
-
 		
 	while(1)
 	{

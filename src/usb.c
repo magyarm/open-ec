@@ -351,7 +351,7 @@ static void usb_config_callback(usbd_device *usbd_dev, uint16_t wValue)
 
 	usbd_ep_setup(usbd_dev, CDCACM_UART_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
 			NULL);
-	usbd_ep_setup(usbd_dev, 0x04, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
+	usbd_ep_setup(usbd_dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
 
 	usbd_register_control_callback(
 				usbd_dev,

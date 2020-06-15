@@ -25,8 +25,6 @@
 #define __PLATFORM_H
 
 #include "gpio.h"
-#include "timing.h"
-#include "timing_stm32.h"
 
 #define PLATFORM_HAS_TRACESWO
 #define PLATFORM_HAS_POWER_SWITCH
