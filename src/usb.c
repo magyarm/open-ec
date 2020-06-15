@@ -49,40 +49,6 @@ static const struct usb_device_descriptor dev = {
 	.bNumConfigurations = 1,
 };
 
-static const struct usb_endpoint_descriptor jtag_endp[] = {
-	{
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = CDCACM_GDB_DATA_ENDPOINT,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-	}, {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-	.bEndpointAddress = 0x02,
-	.bmAttributes = USB_ENDPOINT_ATTR_BULK,
-	.wMaxPacketSize = 64,
-	.bInterval = 1,
-	}
-};
-
-static const struct usb_interface_descriptor jtag_iface[] = {
-	{
-	.bLength = USB_DT_INTERFACE_SIZE,
-	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 0,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
-	.bInterfaceClass = USB_CLASS_VENDOR,
-	.bInterfaceSubClass = USB_CLASS_VENDOR,
-	.bInterfaceProtocol = USB_CLASS_VENDOR,
-	.iInterface = 1,
-
-	.endpoint = jtag_endp,
-	}
-};
-
 /* Serial ACM interface */
 static const struct usb_endpoint_descriptor uart_comm_endp[] = {{
 	.bLength = USB_DT_ENDPOINT_SIZE,
@@ -127,7 +93,7 @@ static const struct {
 		.bDescriptorType = CS_INTERFACE,
 		.bDescriptorSubtype = USB_CDC_TYPE_CALL_MANAGEMENT,
 		.bmCapabilities = 0,
-		.bDataInterface = 3,
+		.bDataInterface = UART_DATA_IFACE,
 	},
 	.acm = {
 		.bFunctionLength = sizeof(struct usb_cdc_acm_descriptor),
@@ -139,7 +105,7 @@ static const struct {
 		.bFunctionLength = sizeof(struct usb_cdc_union_descriptor),
 		.bDescriptorType = CS_INTERFACE,
 		.bDescriptorSubtype = USB_CDC_TYPE_UNION,
-		.bControlInterface = 2,
+		.bControlInterface = UART_COMM_IFACE,
 		.bSubordinateInterface0 = 3,
 	 }
 };
@@ -148,7 +114,7 @@ static const struct usb_interface_descriptor uart_comm_iface[] = {
 	{
 	.bLength = USB_DT_INTERFACE_SIZE,
 	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 2,
+	.bInterfaceNumber = UART_COMM_IFACE,
 	.bAlternateSetting = 0,
 	.bNumEndpoints = 1,
 	.bInterfaceClass = USB_CLASS_CDC,
@@ -166,7 +132,7 @@ static const struct usb_interface_descriptor uart_comm_iface[] = {
 static const struct usb_interface_descriptor uart_data_iface[] = {{
 	.bLength = USB_DT_INTERFACE_SIZE,
 	.bDescriptorType = USB_DT_INTERFACE,
-	.bInterfaceNumber = 3,
+	.bInterfaceNumber = UART_DATA_IFACE,
 	.bAlternateSetting = 0,
 	.bNumEndpoints = 2,
 	.bInterfaceClass = USB_CLASS_DATA,
@@ -191,9 +157,6 @@ static const struct usb_iface_assoc_descriptor uart_assoc = {
 static const struct usb_interface ifaces[] = {
 	{
 			.num_altsetting = 1,
-			.altsetting = jtag_iface,
-	}, {
-			.num_altsetting = 1,
 			.iface_assoc = &uart_assoc,
 			.altsetting = uart_comm_iface,
 	}, {
@@ -211,7 +174,7 @@ static const struct usb_config_descriptor config = {
 	.bLength = USB_DT_CONFIGURATION_SIZE,
 	.bDescriptorType = USB_DT_CONFIGURATION,
 	.wTotalLength = 0,
-	.bNumInterfaces = 3,
+	.bNumInterfaces = 2,
 	.bConfigurationValue = 1,
 	.iConfiguration = 0,
 	.bmAttributes = 0x80,
