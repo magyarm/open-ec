@@ -344,14 +344,17 @@ static void usb_config_callback(usbd_device *usbd_dev, uint16_t wValue)
 {
 	(void)wValue;
 
-	usbd_ep_setup(usbd_dev, CDCACM_GDB_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
+//	usbd_ep_setup(usbd_dev, CDCACM_GDB_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
+//			NULL);
 	//TODO: Setup DAP Endpoint here
 	//	usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, jtag_data_rx_cb); //JTAG
 
-	usbd_ep_setup(usbd_dev, CDCACM_UART_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64,
-			NULL);
-	usbd_ep_setup(usbd_dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK, 64, serial_data_rx_cb); //Serial
+	usbd_ep_setup(usbd_dev, CDCACM_UART_ENDPOINT, USB_ENDPOINT_ATTR_BULK,
+			CDCACM_PACKET_SIZE / 2, NULL);
+	usbd_ep_setup(usbd_dev, CDCACM_UART_DATA_ENDPOINT, USB_ENDPOINT_ATTR_BULK,
+			CDCACM_PACKET_SIZE, serial_data_rx_cb); //Serial
+	usbd_ep_setup(usbd_dev, CDCACM_UART_COMM_ENDPOINT, USB_ENDPOINT_ATTR_INTERRUPT,
+			16, NULL);
 
 	usbd_register_control_callback(
 				usbd_dev,
