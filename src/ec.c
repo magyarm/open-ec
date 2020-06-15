@@ -150,150 +150,6 @@ static void gpio_setup(void)
 	//暂且用Bitbang模拟SESPM
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-uint8_t bulkout_buf[2][64] = {{0x01, 0x60}, {0x01, 0x60}};
-volatile uint8_t latency_timer[2] = {3, 3};
-
-uint8_t dtr = 1, rts = 1;
-
-
-
-
-
-
-typedef int32_t ring_size_t;
-
-struct ring {
-		uint8_t *data;
-		ring_size_t size;
-volatile	uint32_t begin;
-volatile	uint32_t end;
-};
-
-#define RING_SIZE(RING)  ((RING)->size - 1)
-#define RING_DATA(RING)  (RING)->data
-#define RING_EMPTY(RING) ((RING)->begin == (RING)->end)
-
-static void ring_init(volatile struct ring *ring, uint8_t *buf, ring_size_t size)
-{
-	ring->data = buf;
-	ring->size = size;
-	ring->begin = 0;
-	ring->end = 0;
-}
-
-static inline int32_t ring_write_ch(volatile struct ring *ring, uint8_t ch)
-{
-	ring->end %= ring-> size;
-	if (((ring->end + 1) % ring->size) != ring->begin) {
-		ring->data[ring->end++] = ch;
-		ring->end %= ring->size;
-		return (uint32_t)ch;
-	}
-
-	return -1;
-}
-
-static inline int32_t ring_write(volatile struct ring *ring, uint8_t *data, ring_size_t size)
-{
-	int32_t i;
-
-	for (i = 0; i < size; i++) {
-		if (ring_write_ch(ring, data[i]) < 0)
-			return -i;
-	}
-
-	return i;
-}
-
-static inline int32_t ring_read_ch(volatile struct ring *ring, uint8_t *ch)
-{
-	int32_t ret = -1;
-
-	if (ring->begin != ring->end) {
-		ret = ring->data[ring->begin++];
-		ring->begin %= ring->size;
-		if (ch)
-			*ch = ret;
-	}
-
-	return ret;
-}
-
-static inline int32_t ring_read(volatile struct ring *ring, uint8_t *data, ring_size_t size)
-{
-	int32_t i;
-
-	for (i = 0; i < size; i++) {
-		if (ring_read_ch(ring, data + i) < 0)
-			return i;
-	}
-
-	return 0;
-}
-
-
-static inline uint32_t ring_size(volatile struct ring *ring)
-{
-	int size = (ring->end - ring->begin);
-	if (size < 0) size = size + ring->size;
-	return size;
-}
-
-static inline uint32_t ring_remain(volatile struct ring *ring)
-{
-	return ring->size - ring_size(ring);
-}
-
-
-#define BUFFER_SIZE_IN 256
-#define BUFFER_SIZE_OUT 256
-
-#define SERIAL_IN_SINGLEBUF 1
-#define UART_SEND_BLOCKING
-
-#if (!SERIAL_IN_SINGLEBUF)
-volatile struct ring serial_in_ring;
-volatile struct ring jtag_in_ring;
-#endif
-
-volatile struct ring serial_out_ring;
-volatile struct ring jtag_out_ring;
-/* 256 byte的 收发缓冲区 */
-#if (!SERIAL_IN_SINGLEBUF)
-uint8_t ringbuf_jtag_in_buffer[BUFFER_SIZE_IN];
-uint8_t ringbuf_serial_in_buffer[BUFFER_SIZE_IN];
-#endif
-
-uint8_t ringbuf_jtag_out_buffer[BUFFER_SIZE_OUT];
-uint8_t ringbuf_serial_out_buffer[BUFFER_SIZE_OUT];
-
-static void ring_init_all(void)
-{
-#if (!SERIAL_IN_SINGLEBUF)
-	ring_init(&serial_in_ring, ringbuf_serial_in_buffer, BUFFER_SIZE_IN);
-	ring_init(&jtag_in_ring, ringbuf_jtag_in_buffer, BUFFER_SIZE_IN);
-#endif
-	ring_init(&serial_out_ring, ringbuf_serial_out_buffer, BUFFER_SIZE_OUT);
-	ring_init(&jtag_out_ring, ringbuf_jtag_out_buffer, BUFFER_SIZE_OUT);
-}
-
-/* 环形缓冲区结束 */
-
 #if SERIAL_IN_SINGLEBUF
 uint8_t serial_recv_buf[64];
 uint8_t serial_recv_len;
@@ -307,37 +163,14 @@ uint8_t jtag_recv_i;
 void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
 	(void)ep;
-#if SERIAL_IN_SINGLEBUF
-	serial_recv_len = usbd_ep_read_packet(usbd_dev, 0x04, serial_recv_buf, 64);
+	serial_recv_len = usbd_ep_read_packet(usbd_dev, CDCACM_UART_ENDPOINT, serial_recv_buf, 64);
 	if (serial_recv_len)
 	{
-#ifdef UART_SEND_BLOCKING
 		int i;
 		for(i = 0; i < serial_recv_len; i++)
 			usart_send_blocking(USART1, serial_recv_buf[i]);
 		gpio_set(GPIOB, GPIO2);
-#else
-		usbd_ep_nak_set(usbd_dev, 0x04, 1); //阻塞
-		serial_recv_i = 0;
-		//USART_CR1(USART1) |= USART_CR1_TXEIE;//开USART1空发送中断
-#endif
 	}
-#else
-	uint8_t buf[64];
-	int len = usbd_ep_read_packet(usbd_dev, 0x04, buf, 64);
-	int remains = ring_remain(&serial_in_ring);
-	
-	if(remains - len < 64)
-	{
-		usbd_ep_nak_set(usbd_dev, 0x04, 1); //阻塞
-	}
-		
-	if(len)
-	{
-		ring_write(&serial_in_ring, buf, len);
-		//USART_CR1(USART1) |= USART_CR1_TXEIE;//开USART1空发送中断
-	}
-#endif
 }
 
 static void interrupt_setup(void)
@@ -369,9 +202,6 @@ static void interrupt_setup(void)
 	__asm__("cpsie i"); 
 }
 
-volatile uint16_t timer_count = 0;
-volatile uint16_t last_send = 0;
-
 void sys_tick_handler(void)
 {
 	timer_count ++;
@@ -381,45 +211,32 @@ void sys_tick_handler(void)
 
 
 static void usb_packet_handler(void)
-{ //防止被USB中断抢占
-	if(ring_size(&serial_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT)) //需要接收 (串口)
-	{
-		ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读62个byte
-		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
-		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT, bulkout_buf[1], 64);
-		//asm("cpsie i");
+{
+	/* if fifo empty, nothing further to do */
+	if (buf_rx_in == buf_rx_out) {
+		/* turn off LED, disable IRQ */
+		gpio_clear(GPIOB, GPIO2);
 	}
+	else
+	{
+		uint8_t packet_buf[CDCACM_PACKET_SIZE];
+		uint8_t packet_size = 0;
+		uint8_t buf_out = buf_rx_out;
 
-	if(ring_size(&jtag_out_ring) > 62 && st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT)) //需要接收 (SESPM)
-	{
-		ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读62个byte
-		//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[1], 64) == 0) {timeout++; if (timeout > 16) break;} //发出去
-		//asm("cpsid i");
-		usbd_ep_write_packet(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT, bulkout_buf[0], 64);
-		//asm("cpsie i");
-	}	
-	
-	if((unsigned)(timer_count - last_send) > latency_timer[0]) //超时
-	{
-		last_send = timer_count;
-		int len;
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT))
+		/* copy from uart FIFO into local usb packet buffer */
+		while (buf_rx_in != buf_out && packet_size < CDCACM_PACKET_SIZE)
 		{
-			len = ring_read(&jtag_out_ring, bulkout_buf[0] + 2, 62);//读N个byte
-			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, JTAG_ENDPOINT, bulkout_buf[0], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发SESPM
-			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, CDCACM_GDB_DATA_ENDPOINT, bulkout_buf[0], 2 + len);
-			//asm("cpsie i");
+			packet_buf[packet_size++] = buf_rx[buf_out++];
+			/* wrap out pointer */
+			if (buf_out >= FIFO_SIZE)
+			{
+				buf_out = 0;
+			}
 		}
-		if(st_usbfs_ep_in_ready(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT))
-		{
-			len = ring_read(&serial_out_ring, bulkout_buf[1] + 2, 62);//读N个byte
-			//timeout = 0;while(usbd_ep_write_packet(usbd_dev_handler, SERIAL_ENDPOINT_ADDRESS, bulkout_buf[1], 2 + len) == 0) {timeout++; if (timeout > 16) break;} //发串口
-			//asm("cpsid i");
-			usbd_ep_write_packet(usbd_dev_handler, CDCACM_UART_DATA_ENDPOINT, bulkout_buf[1], 2 + len);
-			//asm("cpsie i");
-		}
+		/* advance fifo out pointer by amount written */
+		buf_rx_out += usbd_ep_write_packet(usbd_dev_handler,
+				CDCACM_UART_ENDPOINT, packet_buf, packet_size);
+		buf_rx_out %= FIFO_SIZE;
 	}
 }
 /* 串口开始 */
@@ -447,37 +264,21 @@ void usart1_isr(void) //串口中断
 		((USART_SR(USART1) & USART_SR_ORE) != 0) ||
 		((USART_SR(USART1) & USART_SR_NE) != 0) ||
 		((USART_SR(USART1) & USART_SR_FE) != 0)) {
-		ring_write_ch(&serial_out_ring, USART_DR(USART1) & USART_DR_MASK); //接收
-	}
-	/* 发送完成中断 */
-#ifndef UART_SEND_BLOCKING
-	if (((USART_SR(USART1) & USART_SR_TXE) != 0) && ((USART_CR1(USART1) & USART_CR1_TXEIE) != 0)) 
-	{
-	#if SERIAL_IN_SINGLEBUF
-		USART_DR(USART1) = serial_recv_buf[serial_recv_i] & USART_DR_MASK;
-		serial_recv_i ++;
-		if(serial_recv_i >= serial_recv_len)
+//		circular_buf_put( serial_uart_in_cbuf, USART_DR(USART1) & USART_DR_MASK); //接收
+		if (((buf_rx_in + 1) % FIFO_SIZE) != buf_rx_out)
 		{
-			usbd_ep_nak_set(usbd_dev_handler, 0x04, 0); //开放USB接收
-			USART_CR1(USART1) &= ~USART_CR1_TXEIE;
+			/* insert into FIFO */
+			buf_rx[buf_rx_in++] = (USART_DR(USART1) & USART_DR_MASK);
+
+			/* wrap out pointer */
+			if (buf_rx_in >= FIFO_SIZE)
+			{
+				buf_rx_in = 0;
+			}
 		}
-	#else
-		volatile int32_t data = ring_read_ch(&serial_in_ring, NULL);
-		
-		if (data == -1) { //没有即停止
-			USART_CR1(USART1) &= ~USART_CR1_TXEIE;
-			usbd_ep_nak_set(usbd_dev_handler, 0x04, 0); //开放USB接收
-		} else {
-			USART_DR(USART1) = data & USART_DR_MASK; //发送数据
-		}
-	#endif
 	}
-#endif
 	gpio_set(GPIOB, GPIO2);
 }
-
-/* 串口结束 */
-
 
 int main(void)
 {
@@ -489,8 +290,7 @@ int main(void)
 	gpio_clear(GPIOA, GPIO8); //关USB上拉 
 	
 	usb_init();
-	
-	ring_init_all(); //开环形缓冲区
+
 	uart_setup();
 		
 	interrupt_setup();/* 开中断 */
