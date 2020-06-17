@@ -35,13 +35,6 @@
 #define SERIAL_IN_SINGLEBUF 1
 #define UART_SEND_BLOCKING
 
-
-#define dtr_set() gpio_set(GPIOB, GPIO15); gpio_set(GPIOB, GPIO10)
-#define dtr_clr() gpio_clear(GPIOB, GPIO15); gpio_clear(GPIOB, GPIO10)
-
-#define rts_set() gpio_set(GPIOA, GPIO2); gpio_set(GPIOB, GPIO11)
-#define rts_clr() gpio_clear(GPIOA, GPIO2); gpio_clear(GPIOB, GPIO11)
-
 extern usbd_device *usbd_dev_handler;
 extern volatile uint8_t attached;
 
@@ -137,8 +130,7 @@ static void clock_setup(void)
 
 static void gpio_setup(void)
 {		
-	dtr_set();
-	rts_set();
+
 	/* LED 引脚 */
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_50_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO2 | GPIO10 | GPIO11);
@@ -159,8 +151,8 @@ static void gpio_setup(void)
 	gpio_set_mode(GPIOA, GPIO_MODE_INPUT,
 			GPIO_CNF_INPUT_FLOAT, GPIO6); //TDO
 			
-	gpio_set(GPIOA, GPIO5 | GPIO6 | GPIO7);
-	gpio_set(GPIOB, GPIO14);
+	gpio_set(GPIOA, GPIO2 | GPIO5 | GPIO6 | GPIO7);
+	gpio_set(GPIOB, GPIO10 | GPIO11 | GPIO14 | GPIO15 );
 			
 	/* 防止电源短路 */
 	gpio_set_mode(GPIOB, GPIO_MODE_INPUT,
@@ -168,15 +160,9 @@ static void gpio_setup(void)
 	//暂且用Bitbang模拟SESPM
 }
 
-#if SERIAL_IN_SINGLEBUF
 uint8_t serial_recv_buf[64];
 uint8_t serial_recv_len;
 uint8_t serial_recv_i;
-
-uint8_t jtag_recv_buf[64];
-uint8_t jtag_recv_len;
-uint8_t jtag_recv_i;
-#endif
 
 void serial_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 {
@@ -239,7 +225,7 @@ static void usb_packet_handler(void)
 	{
 		uint8_t packet_buf[CDCACM_PACKET_SIZE];
 		uint8_t packet_size = 0;
-		uint8_t buf_out = buf_rx_out;
+		uint32_t buf_out = buf_rx_out;
 
 		/* copy from uart FIFO into local usb packet buffer */
 		while (buf_rx_in != buf_out && packet_size < CDCACM_PACKET_SIZE)

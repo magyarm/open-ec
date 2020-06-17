@@ -25,6 +25,14 @@ char serial_no[13];
 char serial_no[9];
 #endif
 
+//BOOT pin
+#define dtr_set() gpio_set(GPIOB, GPIO15); gpio_set(GPIOB, GPIO10)
+#define dtr_clr() gpio_clear(GPIOB, GPIO15); gpio_clear(GPIOB, GPIO10)
+//xRST
+#define rts_set() gpio_set(GPIOA, GPIO2); gpio_set(GPIOB, GPIO11)
+#define rts_clr() gpio_clear(GPIOA, GPIO2); gpio_clear(GPIOB, GPIO11)
+
+
 usbd_device *usbd_dev_handler;
 
 /* Buffer to be used for control requests. */
@@ -211,7 +219,7 @@ static void cdcacm_set_modem_state(usbd_device *dev, int iface, bool dsr, bool d
 	notif->wLength = 2;
 	buf[8] = (dsr ? 2 : 0) | (dcd ? 1 : 0);
 	buf[9] = 0;
-	usbd_ep_write_packet(dev, CDCACM_UART_DATA_ENDPOINT + iface, buf, 10);
+	usbd_ep_write_packet(dev, CDCACM_UART_COMM_ENDPOINT + iface, buf, 10);
 }
 
 void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
@@ -256,10 +264,33 @@ static int ec_control_request(usbd_device *dev,
 	(void)buf;
 	(void)dev;
 	(void)len;
+	bool rts = false;
+	bool dtr = false;
 
 	switch(req->bRequest) {
 	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
-		cdcacm_set_modem_state(dev, req->wIndex, true, true);
+		switch( req->bmRequestType ) {
+		case USB_CDC_REQ_TYPE_SetControlLineState:
+			if( INDICATE_TO_DCE_IF_DTE_PRESENT_DTR & req->wValue ) {
+				dtr_set();
+				dtr = true;
+			} else {
+				dtr_clr();
+				dtr = false;
+			}
+			if ( CARRIER_CONTROL_FOR_HALF_DUPLEX_RTS & req->wValue ) {
+				rts_set();
+				rts = true;
+			} else {
+				rts_clr();
+				rts = false;
+			}
+			cdcacm_set_modem_state(dev, req->wIndex, rts, dtr);
+			break;
+		default:
+			return USBD_REQ_NOTSUPP;
+		}
+
 		/* Ignore if not for GDB interface */
 		if(req->wIndex != 0)
 			return USBD_REQ_HANDLED;
